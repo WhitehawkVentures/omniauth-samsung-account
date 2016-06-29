@@ -8,12 +8,14 @@ module OmniAuth
   module Strategies
     class SamsungAccount < OmniAuth::Strategies::OAuth2
       TOKEN_URL_PATH = "/auth/oauth2/token"
+      TOKEN_VALIDATE_PATH = "/v2/license/security/authorizeToken"
+      PROFILE_PATH = "/v2/profile/user/user"
 
       option :name, "samsung_account"
 
       option :provider_ignores_state, true
       option :client_options, {
-        :site => 'https://account.samsung.com',
+        :site => 'https://api.samsungosp.com',
         :authorize_url => 'https://us.account.samsung.com/account/check.do',
         :token_url => "https://auth.samsungosp.com#{TOKEN_URL_PATH}"
       }
@@ -25,7 +27,7 @@ module OmniAuth
       option :go_back_url, nil
 
       uid {
-        access_token.params["userId"]
+        raw_info["userId"]
       }
 
       credentials do
@@ -43,8 +45,18 @@ module OmniAuth
 
       info do
         hash = {}
-        hash["email"] = access_token.params["email"]
+        hash["email"] = raw_info["UserVO"]["userIdentificationVO"]["loginID"]
+        hash["first_name"] = raw_info["UserVO"]["userBaseVO"]["userBaseIndividualVO"]["givenName"]
+        hash["last_name"] = raw_info["UserVO"]["userBaseVO"]["userBaseIndividualVO"]["familyName"]
+        hash["birthday"] = raw_info["UserVO"]["userBaseVO"]["userBaseIndividualVO"]["birthDate"]
         hash
+        prune! hash
+      end
+
+      extra do
+        hash = {}
+        hash['raw_info'] = raw_info unless skip_info?
+        prune! hash
       end
 
       def request_phase
@@ -53,11 +65,11 @@ module OmniAuth
                    request.params["country_code"] || options.country_code)
         case gateway.downcase
         when "us"
-          c.options[:authorize_url] = "https://us.account.samsung.com/mobile/account/check.do"
+          c.options[:authorize_url] = "https://us.account.samsung.com/account/check.do"
         when "eu"
-          c.options[:authorize_url] = "https://account.samsung.com/mobile/account/check.do"
+          c.options[:authorize_url] = "https://account.samsung.com/account/check.do"
         when "cn"
-          c.options[:authorize_url] = "https://account.samsung.cn/mobile/account/check.do"
+          c.options[:authorize_url] = "https://account.samsung.cn/account/check.do"
         end
         params = {
           "redirect_uri" => callback_url,
@@ -71,8 +83,48 @@ module OmniAuth
         redirect c.authorize_url(params)
       end
 
+      def raw_info
+        @raw_info ||= begin
+          access_token.options.merge!({
+                                          header_format: "Basic #{Base64.strict_encode64("#{client.id}:#{client.secret}")}",
+                                          param_name: 'access_token'
+                                      })
+          response = access_token.get(TOKEN_VALIDATE_PATH, {
+              :params => {
+                  :authToken => access_token.token
+              },
+              :headers => {
+                  "x-osp-appId" => client.id
+              }
+          }).parsed || {}
+          guid = response["AuthorizeTokenResultVO"]["authenticateUserID"]
+          results = access_token.get("#{PROFILE_PATH}/#{guid}", { :headers => { "x-osp-appId" => access_token.client.id, "x-osp-userId" => guid } }).parsed || {}
+          results.merge("userId" => guid)
+        end
+      end
+
       protected
+      def prune!(hash)
+        hash.delete_if do |_, value|
+          prune!(value) if value.is_a?(Hash)
+          value.nil? || (value.respond_to?(:empty?) && value.empty?)
+        end
+      end
+
       def build_samsung_access_token
+        client = self.client
+
+        if request.params["access_token"]
+          token = ::OAuth2::AccessToken.new(
+              client, request.params["access_token"],
+              :expires_at => Time.now.to_i + 86400,
+              :expires_in => 86400,
+              :refresh_token => "-1",
+              :random => 1
+          )
+          return token
+        end
+
         json = JSON.parse(request.params["code"])
         code = json["code"]
         scope = json["scode"]
@@ -87,7 +139,6 @@ module OmniAuth
         }
 
         # Create a local var so we mutate a given client instance.
-        client = self.client
         client.options[:token_url] = "https://%s%s" % [auth_server_url, TOKEN_URL_PATH]
         token = client.auth_code.get_token(code, base_params.merge(token_params.to_hash(:symbolize_keys => true)), deep_symbolize(options.auth_token_params))
         token.params["email"] = email
