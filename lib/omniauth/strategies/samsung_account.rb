@@ -10,14 +10,15 @@ module OmniAuth
       TOKEN_URL_PATH = "/auth/oauth2/token"
       TOKEN_VALIDATE_PATH = "/v2/license/security/authorizeToken"
       PROFILE_PATH = "/v2/profile/user/user"
+      PROXY_HOST = "samsung.touchofmodern.com"
 
       option :name, "samsung_account"
 
       option :provider_ignores_state, true
       option :client_options, {
-        :site => 'https://api.samsungosp.com',
-        :authorize_url => 'https://us.account.samsung.com/account/check.do',
-        :token_url => "https://auth.samsungosp.com#{TOKEN_URL_PATH}"
+        :site => "https://api.samsungosp.com",
+        :authorize_url => "https://us.account.samsung.com/account/check.do",
+        :token_url => "https://#{PROXY_HOST}/auth.samsungosp.com#{TOKEN_URL_PATH}"
       }
       option :gateway, nil
       option :scope, "3RD_PARTY"
